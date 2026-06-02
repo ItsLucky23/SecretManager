@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Secret Manager — Log in</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-slate-100 text-slate-800">
+    <main class="mx-auto flex min-h-screen max-w-md items-center px-4">
+      <div class="w-full rounded-xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+        <h1 class="mb-1 text-xl font-semibold">Secret Manager</h1>
+        <p class="mb-5 text-sm text-slate-500">Log in with the admin auth token to continue.</p>
+
+        <form id="login-form" autocomplete="off">
+          <label for="token" class="block text-sm font-medium text-slate-700">Auth token</label>
+          <input
+            id="token"
+            type="password"
+            autocomplete="off"
+            placeholder="paste the auth token"
+            class="mb-4 mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-slate-500 focus:outline-none"
+          />
+          <button
+            id="submit"
+            type="submit"
+            class="w-full rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          >
+            Log in
+          </button>
+        </form>
+
+        <div id="message" class="mt-4 hidden rounded-lg px-4 py-3 text-sm"></div>
+      </div>
+    </main>
+
+    <script>
+      // Backend base URL — fixed in code, NOT user-editable. Hardcode a full URL
+      // here if the API runs on a different host/port, e.g. 'http://127.0.0.1:4000'.
+      // Defaults to the origin that served this page.
+      const BACKEND_URL = window.location.origin;
+      const SESSION_KEY = 'sm_session';
+      const EDITOR_PATH = '/editor';
+
+      const $ = (id) => document.getElementById(id);
+      const messageBox = $('message');
+
+      function showMessage(text, kind = 'error') {
+        const styles = {
+          info: 'bg-slate-100 text-slate-700',
+          error: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
+        };
+        messageBox.className = `mt-4 rounded-lg px-4 py-3 text-sm ${styles[kind]}`;
+        messageBox.textContent = text;
+        messageBox.classList.remove('hidden');
+      }
+
+      // Generate a UUID v4 on the client. Prefer the native API; fall back to
+      // getRandomValues for non-secure contexts where randomUUID is unavailable.
+      function uuidv4() {
+        if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+        const b = crypto.getRandomValues(new Uint8Array(16));
+        b[6] = (b[6] & 0x0f) | 0x40; // version 4
+        b[8] = (b[8] & 0x3f) | 0x80; // variant
+        const h = [...b].map((x) => x.toString(16).padStart(2, '0'));
+        return (
+          h.slice(0, 4).join('') +
+          '-' +
+          h.slice(4, 6).join('') +
+          '-' +
+          h.slice(6, 8).join('') +
+          '-' +
+          h.slice(8, 10).join('') +
+          '-' +
+          h.slice(10, 16).join('')
+        );
+      }
+
+      $('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const token = $('token').value.trim();
+        if (!token) {
+          showMessage('Enter the auth token.');
+          return;
+        }
+
+        const sessionId = uuidv4();
+        $('submit').disabled = true;
+        let res;
+        try {
+          res = await fetch(BACKEND_URL + '/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token, sessionId }),
+          });
+        } catch (err) {
+          showMessage(
+            `Couldn't reach the backend at ${BACKEND_URL}. Is the server running, and is the ` +
+              `address correct? (${err.message})`,
+          );
+          $('submit').disabled = false;
+          return;
+        }
+
+        if (res.status === 401) {
+          showMessage('Invalid token — try again.');
+          $('submit').disabled = false;
+          return;
+        }
+        if (!res.ok) {
+          let msg = `Login failed (${res.status})`;
+          try {
+            const b = await res.json();
+            if (b && b.error) msg = b.error;
+          } catch {
+            /* non-JSON */
+          }
+          showMessage(`${msg} — backend: ${BACKEND_URL}`);
+          $('submit').disabled = false;
+          return;
+        }
+
+        // Token matched: the server stored this session id with its TTL. Persist
+        // it client-side and move to the editor.
+        localStorage.setItem(SESSION_KEY, sessionId);
+        window.location.replace(EDITOR_PATH);
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "luckystack-secret-manager",
+  "version": "1.0.0",
+  "description": "Tiny append-only, versioned secret manager — Node HTTP server + static admin page.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "license": "MIT"
+}
