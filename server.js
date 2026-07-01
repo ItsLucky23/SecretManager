@@ -216,35 +216,29 @@ export function createSecretManagerServer({ token, dataFile, sessionTtlMs = DEFA
   });
 }
 
-// --- Entry point: only run when invoked directly (`node server.js`). ---------
-const invokedDirectly =
-  process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+// Optionally load a .env that sits next to this file. Node does not read .env
+// automatically — without this, `node server.js` only sees real env vars.
+// Variables already set in the real environment take precedence.
+const ENV_FILE = join(__dirname, '.env');
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
-if (invokedDirectly) {
-  // Optionally load a .env that sits next to this file. Node does not read .env
-  // automatically — without this, `node server.js` only sees real env vars.
-  // Variables already set in the real environment take precedence.
-  const ENV_FILE = join(__dirname, '.env');
-  if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
-
-  const TOKEN = process.env.SECRET_MANAGER_TOKEN;
-  if (!TOKEN) {
-    console.error('FATAL: SECRET_MANAGER_TOKEN is not set. Refusing to start.');
-    process.exit(1);
-  }
-  const PORT = Number(process.env.PORT) || 4000;
-  const HOST = process.env.HOST || '127.0.0.1';
-  const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
-  const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || DEFAULT_SESSION_TTL_MS;
-
-  const server = createSecretManagerServer({
-    token: TOKEN,
-    dataFile: DATA_FILE,
-    sessionTtlMs: SESSION_TTL_MS,
-  });
-  server.listen(PORT, HOST, () => {
-    console.log(`Secret manager listening on http://${HOST}:${PORT}`);
-    console.log(`Store: ${DATA_FILE}`);
-    console.log(`Session TTL: ${SESSION_TTL_MS} ms`);
-  });
+const TOKEN = process.env.SECRET_MANAGER_TOKEN;
+if (!TOKEN) {
+  console.error('FATAL: SECRET_MANAGER_TOKEN is not set. Refusing to start.');
+  process.exit(1);
 }
+const PORT = Number(process.env.PORT) || 4000;
+const HOST = process.env.HOST || '127.0.0.1';
+const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || DEFAULT_SESSION_TTL_MS;
+
+const server = createSecretManagerServer({
+  token: TOKEN,
+  dataFile: DATA_FILE,
+  sessionTtlMs: SESSION_TTL_MS,
+});
+server.listen(PORT, HOST, () => {
+  console.log(`Secret manager listening on http://${HOST}:${PORT}`);
+  console.log(`Store: ${DATA_FILE}`);
+  console.log(`Session TTL: ${SESSION_TTL_MS} ms`);
+});
