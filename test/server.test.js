@@ -4,16 +4,18 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createSecretManagerServer } from '../server.js';
 
-const TOKEN = 'test-token-1234567890';
+const TOKEN = 'test-resolver-token-1234567890';
+const ADMIN_TOKEN = 'test-admin-token-0987654321';
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function startServer(opts = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'sm-srv-'));
   const srv = createSecretManagerServer({
     token: TOKEN,
+    adminToken: ADMIN_TOKEN,
     dataFile: join(dir, 'data.json'),
     ...opts,
   });
@@ -34,7 +36,7 @@ function headers(bearer) {
   return h;
 }
 
-async function login(url, token = TOKEN, sessionId = randomUUID()) {
+async function login(url, token = ADMIN_TOKEN, sessionId = randomUUID()) {
   const res = await fetch(url + '/login', {
     method: 'POST',
     headers: headers(),
@@ -52,10 +54,14 @@ after(async () => {
   await server.stop();
 });
 
-test('login: valid token + v4 uuid → session; wrong token → 401; bad uuid → 400', async () => {
+test('login: admin token + v4 uuid → session; resolver/wrong token → 401; bad uuid → 400', async () => {
   const ok = await login(server.url);
   assert.equal(ok.res.status, 200);
   assert.equal((await ok.res.json()).ok, true);
+
+  const resolverCredential = await login(server.url, TOKEN);
+  assert.equal(resolverCredential.res.status, 401);
+  assert.equal((await resolverCredential.res.json()).code, 'unauthorized');
 
   const wrong = await login(server.url, 'wrong-token');
   assert.equal(wrong.res.status, 401);
@@ -102,7 +108,7 @@ test('keys: a session can append versions and list them masked', async () => {
   assert.ok(text.includes('••••••'));
 });
 
-test('resolve: uses the raw shared token, maps BAR_V2, omits unknown pointers', async () => {
+test('resolve: uses only the resolver token, maps BAR_V2, omits unknown pointers', async () => {
   // Seed via a session.
   const { sessionId } = await login(server.url);
   for (const value of ['bar-v1', 'bar-v2']) {
@@ -124,7 +130,14 @@ test('resolve: uses the raw shared token, maps BAR_V2, omits unknown pointers', 
   assert.equal(values.BAR_V2, 'bar-v2');
   assert.ok(!('NOPE_V9' in values));
 
-  // A session uuid must NOT be accepted on /resolve.
+  // Neither an administrator credential nor a session UUID is accepted on /resolve.
+  const adminCredential = await fetch(server.url + '/resolve', {
+    method: 'POST',
+    headers: headers(ADMIN_TOKEN),
+    body: JSON.stringify({ keys: [] }),
+  });
+  assert.equal(adminCredential.status, 401);
+
   const wrong = await fetch(server.url + '/resolve', {
     method: 'POST',
     headers: headers(sessionId),
@@ -197,6 +210,29 @@ test('CORS: preflight is answered 204 without auth, and exposes the right header
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get('access-control-allow-origin'), '*');
   assert.match(pre.headers.get('access-control-allow-headers'), /authorization/i);
+});
+
+test('admin pages execute no remote scripts and serve their stylesheet locally', async () => {
+  for (const path of ['/', '/editor']) {
+    const response = await fetch(server.url + path);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.doesNotMatch(html, /<script[^>]+src=["']https?:/i);
+    assert.doesNotMatch(html, /cdn\.tailwindcss\.com/i);
+    assert.match(html, /default-src 'none'/);
+    assert.match(html, /<link rel="stylesheet" href="\/styles\.css"/);
+
+    const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(inlineScript);
+    const browserNormalizedScript = inlineScript.replace(/\r\n?/g, '\n');
+    const scriptHash = createHash('sha256').update(browserNormalizedScript).digest('base64');
+    assert.ok(html.includes(`script-src 'sha256-${scriptHash}'`));
+  }
+
+  const stylesheet = await fetch(server.url + '/styles.css');
+  assert.equal(stylesheet.status, 200);
+  assert.match(stylesheet.headers.get('content-type'), /^text\/css/);
+  assert.match(await stylesheet.text(), /\.bg-slate-100/);
 });
 
 test('session TTL: activity slides the window; idle past the TTL expires it', async () => {

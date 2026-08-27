@@ -4,8 +4,8 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Store, isValidBaseName } from './store.js';
 
@@ -76,13 +76,20 @@ async function serveFile(res, filePath, contentType) {
 
 /**
  * Build the HTTP server.
- * - `token`         — the shared secret. Client apps use it directly on /resolve;
- *                     admins exchange it at /login for a session.
+ * - `token`         — the resolver credential used only by client apps on /resolve.
+ * - `adminToken`    — the administrator credential exchanged at /login for a session.
+ *                     Defaults to `token` for backwards compatibility.
  * - `dataFile`      — JSON store path.
  * - `sessionTtlMs`  — admin session lifetime; the TTL slides on each /keys request.
  */
-export function createSecretManagerServer({ token, dataFile, sessionTtlMs = DEFAULT_SESSION_TTL_MS }) {
+export function createSecretManagerServer({
+  token,
+  adminToken = token,
+  dataFile,
+  sessionTtlMs = DEFAULT_SESSION_TTL_MS,
+}) {
   if (!token) throw new Error('token is required');
+  if (!adminToken) throw new Error('adminToken is required');
   const store = new Store(dataFile);
 
   // In-memory admin sessions: sessionId (client-generated UUID v4) -> { timer }.
@@ -130,14 +137,17 @@ export function createSecretManagerServer({ token, dataFile, sessionTtlMs = DEFA
       if (method === 'GET' && (pathname === '/editor' || pathname === '/editor.html')) {
         return await serveFile(res, join(PUBLIC_DIR, 'editor.html'), 'text/html; charset=utf-8');
       }
+      if (method === 'GET' && pathname === '/styles.css') {
+        return await serveFile(res, join(PUBLIC_DIR, 'styles.css'), 'text/css; charset=utf-8');
+      }
 
-      // --- POST /login — exchange the shared token for a session UUID ---
+      // --- POST /login — exchange the admin token for a session UUID ---
       if (method === 'POST' && pathname === '/login') {
         const body = await readJsonBody(req);
         if (typeof body.sessionId !== 'string' || !UUID_V4.test(body.sessionId)) {
           return sendError(res, 400, 'bad_request', 'sessionId must be a v4 UUID');
         }
-        if (typeof body.token !== 'string' || !safeEqual(body.token, token)) {
+        if (typeof body.token !== 'string' || !safeEqual(body.token, adminToken)) {
           return sendError(res, 401, 'unauthorized', 'Invalid token');
         }
         touchSession(body.sessionId);
@@ -216,29 +226,40 @@ export function createSecretManagerServer({ token, dataFile, sessionTtlMs = DEFA
   });
 }
 
-// Optionally load a .env that sits next to this file. Node does not read .env
-// automatically — without this, `node server.js` only sees real env vars.
-// Variables already set in the real environment take precedence.
-const ENV_FILE = join(__dirname, '.env');
-if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+// Keep imports side-effect free for tests and other in-process consumers. Resolve
+// the argv entry to an absolute path so both `node server.js` and process managers
+// that pass an absolute path are recognized as direct execution.
+const invokedDirectly =
+  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-const TOKEN = process.env.SECRET_MANAGER_TOKEN;
-if (!TOKEN) {
-  console.error('FATAL: SECRET_MANAGER_TOKEN is not set. Refusing to start.');
-  process.exit(1);
+if (invokedDirectly) {
+  // Optionally load a .env that sits next to this file. Node does not read .env
+  // automatically — without this, `node server.js` only sees real env vars.
+  // Variables already set in the real environment take precedence.
+  const ENV_FILE = join(__dirname, '.env');
+  if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+
+  const TOKEN = process.env.SECRET_MANAGER_TOKEN;
+  if (!TOKEN) {
+    console.error('FATAL: SECRET_MANAGER_TOKEN is not set. Refusing to start.');
+    process.exit(1);
+  }
+  const ADMIN_TOKEN = process.env.SECRET_MANAGER_ADMIN_TOKEN || TOKEN;
+  const PORT = Number(process.env.PORT) || 4000;
+  const HOST = process.env.HOST || '127.0.0.1';
+  const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
+  const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || DEFAULT_SESSION_TTL_MS;
+
+  const server = createSecretManagerServer({
+    token: TOKEN,
+    adminToken: ADMIN_TOKEN,
+    dataFile: DATA_FILE,
+    sessionTtlMs: SESSION_TTL_MS,
+  });
+  server.listen(PORT, HOST, () => {
+    console.log(`Secret manager listening on http://${HOST}:${PORT}`);
+    console.log(`Store: ${DATA_FILE}`);
+    console.log(`Session TTL: ${SESSION_TTL_MS} ms`);
+    console.log(`Admin credential: ${ADMIN_TOKEN === TOKEN ? 'shared compatibility mode' : 'separate'}`);
+  });
 }
-const PORT = Number(process.env.PORT) || 4000;
-const HOST = process.env.HOST || '127.0.0.1';
-const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
-const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS) || DEFAULT_SESSION_TTL_MS;
-
-const server = createSecretManagerServer({
-  token: TOKEN,
-  dataFile: DATA_FILE,
-  sessionTtlMs: SESSION_TTL_MS,
-});
-server.listen(PORT, HOST, () => {
-  console.log(`Secret manager listening on http://${HOST}:${PORT}`);
-  console.log(`Store: ${DATA_FILE}`);
-  console.log(`Session TTL: ${SESSION_TTL_MS} ms`);
-});
