@@ -2,8 +2,8 @@
 
 A tiny secret manager: a zero-dependency Node.js HTTP server plus a static admin UI (a login page and
 an editor page). Secrets are stored as **append-only, versioned** entries. Client apps authenticate to
-`POST /resolve` with one shared bearer token; admins log in with that token and get a short-lived
-**session** that protects the editor.
+`POST /resolve` with a resolver bearer token; admins use a separate administrator token to obtain a
+short-lived **session** that protects the editor.
 
 ## The pointer model
 
@@ -23,7 +23,7 @@ A pointer has the shape `<BASE_NAME>_V<number>`. At boot, a client sends the poi
 Requires Node.js `>=20.12` (for the built-in `.env` auto-load; earlier `20.x` works too if you pass
 the vars as real environment variables instead of relying on `.env`).
 
-1. **Set a token** (any long random string):
+1. **Set independent resolver and administrator tokens** (two long random strings):
 
    ```bash
    cp .env.example .env
@@ -43,36 +43,33 @@ the vars as real environment variables instead of relying on `.env`).
 
    ```bash
    # bash — inline env vars override .env
-   SECRET_MANAGER_TOKEN=<long-random> PORT=4000 node server.js
+   SECRET_MANAGER_TOKEN=<resolver-random> SECRET_MANAGER_ADMIN_TOKEN=<admin-random> PORT=4000 node server.js
    ```
 
    ```powershell
    # Windows PowerShell — inline `VAR=value node ...` does NOT work; set vars first, or just
    # rely on .env and run `node server.js`.
-   $env:SECRET_MANAGER_TOKEN="<long-random>"; $env:PORT="4000"; node server.js
+   $env:SECRET_MANAGER_TOKEN="<resolver-random>"; $env:SECRET_MANAGER_ADMIN_TOKEN="<admin-random>"; $env:PORT="4000"; node server.js
    ```
 
-   `SECRET_MANAGER_TOKEN` is required — the server refuses to start without it (whether from `.env`
-   or the environment). It binds to `127.0.0.1` by default. To expose it beyond localhost, set
-   `HOST=0.0.0.0` (and put it behind TLS / a reverse proxy — the token is the only thing protecting
-   your secrets).
+   `SECRET_MANAGER_TOKEN` is required — the server refuses to start without it. Set
+   `SECRET_MANAGER_ADMIN_TOKEN` to an independently generated value; omitting it retains the older
+   shared-token behavior only for backwards compatibility. The server binds to `127.0.0.1` by default.
+   To expose it beyond localhost, set `HOST=0.0.0.0` and put it behind TLS / a reverse proxy.
 
 3. **Log in and add a secret:** open <http://127.0.0.1:4000>. You land on the **login page** — paste
-   the auth token and click **Log in**. The browser generates a session UUID, sends it with the token,
+   `SECRET_MANAGER_ADMIN_TOKEN` and click **Log in**. The browser generates a session UUID, sends it with the token,
    and on success forwards you to the **editor** at `/editor`. There, use the **Add secret / new
    version** form: a brand-new `BASE_NAME` creates version 1, an existing one appends the next version
    (the server picks the number). The keys table shows masked values (`••••••`) by default; click the
    **eye** next to a version to fetch and reveal that single value on demand (via `POST /reveal`), and
    click again to hide it. **Log out** ends the session immediately.
 
-   > **Backend URL is fixed in code.** The pages send requests to a `BACKEND_URL` constant at the top
-   > of the `<script>` in `public/login.html` and `public/editor.html` (it defaults to the origin that
-   > served the page). If you host the pages somewhere other than the backend, hardcode the real
-   > backend there, e.g. `const BACKEND_URL = 'http://127.0.0.1:4000'`. Error messages always show the
-   > URL currently in use. A `405 Method Not Allowed` in the UI almost always means `BACKEND_URL`
-   > points at the wrong server (a static host that rejects `POST`). The server enables permissive CORS
-   > so a cross-origin admin page can reach it; this is safe because every endpoint is gated by the
-   > token/session and there are no cookies.
+   > **The admin UI and API are intentionally same-origin.** Its content-security policy permits
+   > requests only to the origin that served the page. Deploy the bundled pages and this server behind
+   > the same hostname; hosting the UI separately is unsupported. The pages execute only
+   > repository-owned inline code allowed by an exact content-security-policy hash and load static CSS
+   > from this server; they execute no third-party JavaScript while credentials or revealed values are present.
 
 ## Resolving secrets (client side)
 
@@ -94,10 +91,11 @@ is fatal) — the batch is never failed wholesale.
 
 ## Admin auth & sessions
 
-The editor is not protected by the raw token — it uses a **session**:
+The editor uses a **session** obtained with the separate administrator credential:
 
-1. The browser generates a **UUID v4** and `POST`s it to `/login` together with the token.
-2. If the token matches, the server stores that UUID **in memory** with a TTL timer (`SESSION_TTL_MS`,
+1. The browser generates a **UUID v4** and `POST`s it to `/login` together with
+   `SECRET_MANAGER_ADMIN_TOKEN`.
+2. If the administrator token matches, the server stores that UUID **in memory** with a TTL timer (`SESSION_TTL_MS`,
    default 7 days) and returns `{ ok: true, ttlMs }`. The browser keeps the UUID in `localStorage`.
 3. Every admin request (`GET`/`POST` on `/keys`) authenticates with `Authorization: Bearer <uuid>` and
    **slides the TTL** — the timer is reset to the full lifetime on each request, so an active session
@@ -105,7 +103,7 @@ The editor is not protected by the raw token — it uses a **session**:
 
 Sessions live only in memory, so a server restart invalidates them (the browser is bounced back to the
 login page on the next `401`). `POST /resolve` is unaffected by all of this — client apps keep using the
-shared token directly.
+resolver token directly.
 
 ## API
 
@@ -116,9 +114,9 @@ All bodies are JSON. Errors have the shape `{ "error": string, "code": string }`
 | --------------- | ------------- | ------------------------------------------------------------------- |
 | `GET /`         | none          | Login page.                                                         |
 | `GET /editor`   | none*         | Editor page (\*self-gates client-side; redirects to login if no session). |
-| `POST /login`   | token in body | `{token, sessionId}` → creates a session. Wrong token → 401.        |
+| `POST /login`   | admin token in body | `{token, sessionId}` → creates a session. Wrong token → 401.  |
 | `POST /logout`  | session       | Ends the session named by the bearer UUID.                          |
-| `POST /resolve` | shared token  | Batch-resolve pointers → real values. The only endpoint clients call. |
+| `POST /resolve` | resolver token | Batch-resolve pointers → real values. The only endpoint clients call. |
 | `GET /keys`     | session       | Admin listing of base names + versions, **masked**. Slides the TTL. |
 | `POST /keys`    | session       | Create a base name (v1) or append the next version. Slides the TTL. Body `{name,value}`. |
 | `POST /reveal`  | session       | Return ONE real value on demand (the editor's eye toggle). Body `{name,version}`; missing → 404. |
@@ -149,6 +147,6 @@ npm test
 node --test "test/**/*.test.js"
 ```
 
-Covers: the append-only invariant, login/sessions, sliding-TTL expiry, admin auth enforcement, resolve
-mapping (including omitted unknown pointers), masking, on-demand reveal, request validation, logout,
-and CORS.
+Covers: the append-only invariant, resolver/admin credential separation, login/sessions, sliding-TTL
+expiry, admin auth enforcement, resolve mapping (including omitted unknown pointers), masking,
+on-demand reveal, local static assets, request validation, logout, and CORS.
