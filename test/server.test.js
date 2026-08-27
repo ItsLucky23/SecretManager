@@ -212,7 +212,7 @@ test('CORS: preflight is answered 204 without auth, and exposes the right header
   assert.match(pre.headers.get('access-control-allow-headers'), /authorization/i);
 });
 
-test('admin pages execute no remote scripts and serve their stylesheet locally', async () => {
+test('admin pages execute no remote scripts and support a same-origin proxy prefix', async () => {
   for (const path of ['/', '/editor']) {
     const response = await fetch(server.url + path);
     assert.equal(response.status, 200);
@@ -220,7 +220,9 @@ test('admin pages execute no remote scripts and serve their stylesheet locally',
     assert.doesNotMatch(html, /<script[^>]+src=["']https?:/i);
     assert.doesNotMatch(html, /cdn\.tailwindcss\.com/i);
     assert.match(html, /default-src 'none'/);
-    assert.match(html, /<link rel="stylesheet" href="\/styles\.css"/);
+    assert.match(html, /<link rel="stylesheet" href="\.\/styles\.css"/);
+    assert.match(html, /const BASE_PATH = pagePath\.replace/);
+    assert.match(html, /const BACKEND_URL = window\.location\.origin \+ BASE_PATH/);
 
     const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(inlineScript);
@@ -228,6 +230,12 @@ test('admin pages execute no remote scripts and serve their stylesheet locally',
     const scriptHash = createHash('sha256').update(browserNormalizedScript).digest('base64');
     assert.ok(html.includes(`script-src 'sha256-${scriptHash}'`));
   }
+
+  assert.equal(new URL('./styles.css', 'https://example.test/').pathname, '/styles.css');
+  assert.equal(
+    new URL('./styles.css', 'https://example.test/secrets/').pathname,
+    '/secrets/styles.css',
+  );
 
   const stylesheet = await fetch(server.url + '/styles.css');
   assert.equal(stylesheet.status, 200);

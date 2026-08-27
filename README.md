@@ -59,17 +59,22 @@ the vars as real environment variables instead of relying on `.env`).
 
 3. **Log in and add a secret:** open <http://127.0.0.1:4000>. You land on the **login page** — paste
    `SECRET_MANAGER_ADMIN_TOKEN` and click **Log in**. The browser generates a session UUID, sends it with the token,
-   and on success forwards you to the **editor** at `/editor`. There, use the **Add secret / new
+   and on success forwards you to the **editor** at the current mount prefix's `/editor`. There, use the **Add secret / new
    version** form: a brand-new `BASE_NAME` creates version 1, an existing one appends the next version
    (the server picks the number). The keys table shows masked values (`••••••`) by default; click the
    **eye** next to a version to fetch and reveal that single value on demand (via `POST /reveal`), and
    click again to hide it. **Log out** ends the session immediately.
 
    > **The admin UI and API are intentionally same-origin.** Its content-security policy permits
-   > requests only to the origin that served the page. Deploy the bundled pages and this server behind
-   > the same hostname; hosting the UI separately is unsupported. The pages execute only
-   > repository-owned inline code allowed by an exact content-security-policy hash and load static CSS
-   > from this server; they execute no third-party JavaScript while credentials or revealed values are present.
+   > requests only to the origin that served the page. A reverse proxy may mount the complete service
+   > under a path prefix such as `/secrets/` when it canonicalizes the bare prefix to a trailing slash
+   > and strips the prefix upstream (for nginx: `location = /secrets { return 308 /secrets/; }` plus
+   > `location /secrets/ { proxy_pass http://127.0.0.1:4000/; }`). The trailing slash is required so
+   > browsers resolve `./styles.css` below the mount. The UI derives the prefix from the canonical path,
+   > including editor navigation and API calls. Hosting the UI on
+   > a different origin remains unsupported. The pages execute only repository-owned inline code
+   > allowed by an exact content-security-policy hash and execute no third-party JavaScript while
+   > credentials or revealed values are present.
 
 ## Resolving secrets (client side)
 
