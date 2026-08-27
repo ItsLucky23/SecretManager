@@ -6,9 +6,9 @@
     <title>Secret Manager — Editor</title>
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'sha256-3Kd4NNDtT1CGErsK/TBZL/5kcWyEGBRGzLhRu2Nbvx8='; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; object-src 'none'"
+      content="default-src 'none'; script-src 'sha256-IP74y8LWe5IPTT8OGK6rhhsDi9983vZ+BeHFqFxSfaw='; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; object-src 'none'"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body class="min-h-screen bg-slate-100 text-slate-800">
     <main class="mx-auto max-w-3xl px-4 py-10">
@@ -86,11 +86,13 @@
     </main>
 
     <script>
-      // Backend base URL — fixed in code, NOT user-editable. Hardcode a full URL
-      // here if the API runs on a different host/port, e.g. 'http://127.0.0.1:4000'.
-      const BACKEND_URL = window.location.origin;
+      // Keep the UI and API same-origin while supporting a reverse-proxy mount
+      // prefix such as /secrets. The proxy must strip that prefix upstream.
+      const pagePath = window.location.pathname.replace(/\/+$/, '');
+      const BASE_PATH = pagePath.replace(/\/(?:index\.html|editor(?:\.html)?)$/, '');
+      const BACKEND_URL = window.location.origin + BASE_PATH;
       const SESSION_KEY = 'sm_session';
-      const LOGIN_PATH = '/';
+      const LOGIN_PATH = BASE_PATH ? `${BASE_PATH}/` : '/';
 
       const $ = (id) => document.getElementById(id);
       const messageBox = $('message');
